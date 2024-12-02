@@ -1,0 +1,3 @@
+[submodule "jetson-prompt"]
+	path = jetson-prompt
+	url = https://github.com/yongjun43/jetson-prompt.git
