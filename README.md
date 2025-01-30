@@ -15,8 +15,8 @@
 
 ## 🍿 시스템 업데이트
 
-  sudo apt update
-  sudo apt upgrade -y
+      sudo apt update
+      sudo apt upgrade -y
 
 ## ✏️ 블로그 글 목록
 
