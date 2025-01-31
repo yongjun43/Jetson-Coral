@@ -1,1 +1,98 @@
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+import numpy as np
+import unittest
+import tensorflow as tf
+from PIL import Image
+from edgetpu.basic.basic_engine import BasicEngine
+from pathlib import Path
+
+def read_segmentation(image_path):
+    img = Image.open(image_path).convert('L')  # Ensure it's grayscale
+    mask = np.array(img, dtype=np.uint8)
+    np.place(mask, mask == 255, 0)  # Change 255 to 0 to follow VOC2012 protocol
+    return mask
+
+def intersection_over_union(mask1, mask2):
+    common = np.sum(mask1 == mask2)
+    return common / (mask1.size + mask2.size - common)
+
+def argmax(input_array, size):
+    input_array = input_array.reshape((-1, size))
+    return np.argmax(input_array, axis=1)
+
+class ModelCorrectnessTest(unittest.TestCase):
+
+    def run_segmentation(self, model_path, image_path, mask_size):
+        interpreter = tf.lite.Interpreter(model_path=model_path)
+        interpreter.allocate_tensors()
+
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
+
+        img = Image.open(image_path).resize((input_details[0]['shape'][1], input_details[0]['shape'][2]))
+        input_data = np.expand_dims(img, axis=0).astype(np.float32)
+
+        interpreter.set_tensor(input_details[0]['index'], input_data)
+        interpreter.invoke()
+
+        output_data = interpreter.get_tensor(output_details[0]['index'])
+
+        if output_details[0]['dtype'] == np.uint8:
+            output_data = argmax(output_data, mask_size)
+        elif output_details[0]['dtype'] == np.int64:
+            output_data = np.squeeze(output_data)  # Remove batch dimension
+        else:
+            raise ValueError(f"Unsupported tensor type: {output_details[0]['dtype']}")
+
+        return output_data
+
+    def test_deeplab_513_mv2_dm1_with_argmax(self):
+        mask = read_segmentation('test_data/bird_segmentation_mask.bmp')
+        cpu_mask = self.run_segmentation('test_data/deeplabv3_mnv2_pascal_quant.tflite', 'test_data/bird_segmentation.bmp', mask.size)
+        edgetpu_mask = self.run_segmentation('test_data/deeplabv3_mnv2_pascal_quant_edgetpu.tflite', 'test_data/bird_segmentation.bmp', mask.size)
+
+        self.assertGreater(intersection_over_union(mask, cpu_mask), 0.9)
+        self.assertGreater(intersection_over_union(mask, edgetpu_mask), 0.9)
+        self.assertGreater(intersection_over_union(cpu_mask, edgetpu_mask), 0.99)
+
+    def test_deeplab_513_mv2_dm05_with_argmax(self):
+        mask = read_segmentation('test_data/bird_segmentation_mask.bmp')
+        cpu_mask = self.run_segmentation('test_data/deeplabv3_mnv2_dm05_pascal_quant.tflite', 'test_data/bird_segmentation.bmp', mask.size)
+        edgetpu_mask = self.run_segmentation('test_data/deeplabv3_mnv2_dm05_pascal_quant_edgetpu.tflite', 'test_data/bird_segmentation.bmp', mask.size)
+
+        self.assertGreater(intersection_over_union(mask, cpu_mask), 0.9)
+        self.assertGreater(intersection_over_union(mask, edgetpu_mask), 0.9)
+        self.assertGreater(intersection_over_union(cpu_mask, edgetpu_mask), 0.98)
+
+    def test_unet_128_mobilenetv2(self):
+        mask = read_segmentation('test_data/dog_segmentation_mask.bmp')
+        cpu_mask = self.run_segmentation('test_data/keras_post_training_unet_mv2_128_quant.tflite', 'test_data/dog_segmentation.bmp', mask.size)
+        edgetpu_mask = self.run_segmentation('test_data/keras_post_training_unet_mv2_128_quant_edgetpu.tflite', 'test_data/dog_segmentation.bmp', mask.size)
+
+        self.assertGreater(intersection_over_union(mask, cpu_mask), 0.86)
+        self.assertGreater(intersection_over_union(mask, edgetpu_mask), 0.86)
+        self.assertGreater(intersection_over_union(cpu_mask, edgetpu_mask), 0.97)
+
+    def test_unet_256_mobilenetv2(self):
+        mask = read_segmentation('test_data/dog_segmentation_mask_256.bmp')
+        cpu_mask = self.run_segmentation('test_data/keras_post_training_unet_mv2_256_quant.tflite', 'test_data/dog_segmentation_256.bmp', mask.size)
+        edgetpu_mask = self.run_segmentation('test_data/keras_post_training_unet_mv2_256_quant_edgetpu.tflite', 'test_data/dog_segmentation_256.bmp', mask.size)
+
+        self.assertGreater(intersection_over_union(mask, cpu_mask), 0.83)
+        self.assertGreater(intersection_over_union(mask, edgetpu_mask), 0.81)
+        self.assertGreater(intersection_over_union(cpu_mask, edgetpu_mask), 0.93)
+
+
+if __name__ == '__main__':
+    unittest.main()
